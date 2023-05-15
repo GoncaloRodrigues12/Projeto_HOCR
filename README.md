@@ -1,4 +1,4 @@
 # HOCRtoMd
 
 # Usage
-python3 parsehocr.py pathToPhoto pathToHocrOutput
+python3.10 main.py pathToPhoto pathToHocrOutput -psm

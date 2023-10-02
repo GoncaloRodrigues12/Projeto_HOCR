@@ -1,0 +1,480 @@
+#!/usr/bin/python3
+import sys
+import PIL.Image
+import PIL.ImageDraw
+import xml.etree.ElementTree as ET
+import pytesseract
+import copy
+import getopt
+import os
+import re
+
+
+class Page:
+    def __init__(self, id):
+        self.id = id
+        self.careas = []
+        self.careasIdx = -1
+        self.images = []
+        self.imagesIdx = -1
+
+    def addCarea(self, carea):
+        self.careasIdx += 1
+        self.careas.append(carea)
+
+    def addImage(self, oppenedImage):
+        self.imagesIdx += 1
+        self.images.append(oppenedImage)
+
+    def addPar(self, par): self.careas[self.careasIdx].addPar(par)
+    def addLine(self, line): self.careas[self.careasIdx].addLine(line)
+    def addWord(self, word): self.careas[self.careasIdx].addWord(word)
+
+
+class Carea:
+    def __init__(self, id, bbox):
+        self.id = id
+        self.bbox = bbox
+        self.pars = []
+        self.parsIdx = -1
+        self.xsize = 0
+        self.lines = 0
+        self.textType = 'normal'
+
+    def addPar(self, par):
+        self.parsIdx += 1
+        self.pars.append(par)
+
+    def addLine(self, line): self.pars[self.parsIdx].addLine(line)
+    def addWord(self, word): self.pars[self.parsIdx].addWord(word)
+
+
+class Par:
+    def __init__(self, id, bbox, lang):
+        self.id = id
+        self.bbox = bbox
+        self.lang = lang
+        self.lines = []
+        self.linesIdx = -1
+
+    def addLine(self, line):
+        self.linesIdx += 1
+        self.lines.append(line)
+
+    def addWord(self, word): self.lines[self.linesIdx].addWord(word)
+
+
+class Line:
+    def __init__(self, id, bbox, x_size):
+        self.id = id
+        self.bbox = bbox
+        self.x_size = x_size
+        self.words = []
+        self.wordsIdx = -1
+
+    def addWord(self, word):
+        self.wordsIdx += 1
+        self.words.append(word)
+
+
+class Word:
+    def __init__(self, id, bbox, x_wconf, text):
+        self.id = id
+        self.bbox = bbox
+        self.x_wconf = x_wconf
+        self.text = text
+
+
+class My_Image:
+    def __init__(self, id, bbox):
+        self.id = id
+        self.bbox = bbox
+
+
+def parseHocr(hocrPath):
+    # Generate ElementTree from hocr in argv[2]
+    tree = ET.parse(hocrPath)
+    root = tree.getroot()[1]    # root[0] = <head>; root[1] = <body>
+
+    page = root[0]     # TODO : if there are other pages needs to iterate over them to parse #for page in root?
+
+    p1 = Page(page.get('id'))
+    for child in page.iter():
+        ocr_class = child.get('class')
+        title = child.get('title').split()
+
+        for idx in range(len(title)):
+            if title[idx] == 'bbox':
+                bbox = [int(title[idx+1]), int(title[idx+2]), int(title[idx+3])]
+                if title[idx+4][-1] == ';':
+                    bbox.append(int(title[idx+4][:-1]))
+                else:
+                    bbox.append(int(title[idx+4]))
+            if title[idx] == 'x_size':
+                x_size = float(title[idx+1][:-1])
+            if title[idx] == 'x_wconf':
+                x_wconf = int(title[idx+1])
+
+        match ocr_class:
+            case 'ocr_carea':
+                p1.addCarea(Carea(child.get('id'), bbox))
+            case 'ocr_par':
+                p1.addPar(Par(child.get('id'), bbox, child.get('lang')))
+            case 'ocr_line' | 'ocr_textfloat' | 'ocr_header' | 'ocr_caption':
+                p1.addLine(Line(child.get('id'), bbox, x_size))
+            case 'ocrx_word':
+                p1.addWord(Word(child.get('id'), bbox, x_wconf, child.text))
+            case 'ocr_photo':
+                p1.addImage(My_Image(child.get('id'), bbox))
+
+    return p1
+
+
+def drawCareaBoxes(oppenedImage, pageObject):
+    for carea in pageObject.careas:
+        x, y = carea.bbox[0], carea.bbox[1]
+        x2, y2 = carea.bbox[2], carea.bbox[3]
+        PIL.ImageDraw.Draw(oppenedImage).rectangle([x, y, x2, y2],
+                                                  fill=None,
+                                                  outline='blue',
+                                                  width=3)
+
+
+def drawParBoxes(oppenedImage, pageObject):
+    for carea in pageObject.careas:
+        for paragraph in carea.pars:
+            x, y = paragraph.bbox[0], paragraph.bbox[1]
+            x2, y2 = paragraph.bbox[2], paragraph.bbox[3]
+            PIL.ImageDraw.Draw(oppenedImage).rectangle([x, y, x2, y2],
+                                                      fill=None,
+                                                      outline='orange',
+                                                      width=2)
+
+
+def drawLinesBoxes(oppenedImage, pageObject):
+    for carea in pageObject.careas:
+        for paragraph in carea.pars:
+            for line in paragraph.lines:
+                x, y = line.bbox[0], line.bbox[1]
+                x2, y2 = line.bbox[2], line.bbox[3]
+                PIL.ImageDraw.Draw(oppenedImage).rectangle([x, y, x2, y2],
+                                                          fill=None,
+                                                          outline='green')
+
+
+def drawImageBoxes(oppenedImage, pageObject):
+    for image in pageObject.images:
+        x, y = image.bbox[0], image.bbox[1],
+        x2, y2 = image.bbox[2], image.bbox[3]
+        PIL.ImageDraw.Draw(oppenedImage).rectangle([x, y, x2, y2],
+                                                    fill=None,
+                                                    outline='red')
+
+
+def drawArticlesBoxes(oppenedImage, artigos):
+    for artigo in artigos.careas:
+        x, y = artigo.bbox[0], artigo.bbox[1]
+        x2, y2 = artigo.bbox[2], artigo.bbox[3]
+        PIL.ImageDraw.Draw(oppenedImage).rectangle([x, y, x2, y2],
+                                                  fill=None,
+                                                  outline='purple',
+                                                  width=2)
+
+
+def extractImages(oppenedImage, pageObject, outputImages):
+    for image in pageObject.images:
+        x, y = image.bbox[0], image.bbox[1]
+        x2, y2 = image.bbox[2], image.bbox[3]
+        tmpImage = oppenedImage.crop((x, y, x2, y2))
+        tmpImage.save(outputImages + "/" + image.id + ".jpg")
+
+
+def organizeArticles(articles):
+    nAr = len(articles) - 1
+    idx = 0
+    lastIdx = 0
+    while (idx < nAr):
+        if articles[idx].pars[0].lines[0].x_size > articles[idx+1].pars[0].lines[0].x_size:
+            # if articles[idx+1].bbox[3] - articles[idx].bbox[3] < 100:
+            articles[idx].pars += articles[idx+1].pars
+            del articles[idx+1]
+            nAr -= 1
+        else:
+            idx += 1
+            lastIdx += 1
+
+
+    toRemove = []
+    """
+    for idx in range(len(articles) - 1):
+        # if x_size1 > x_size2
+        print(articles[idx].id, articles[idx].pars[0].lines[0].x_size, articles[idx].id, articles[idx+1].pars[0].lines[0].x_size)
+        if articles[idx].pars[0].lines[0].x_size > articles[idx+1].pars[0].lines[0].x_size:
+            print('toRemove')
+            articles[idx].pars += articles[idx+1].pars
+            toRemove.append(articles[idx+1].id)
+            del articles[idx+1]
+    """
+        # if bbox1 is shorter than bbox2
+        # if articles[idx].bbox[2] < articles[idx+1].bbox[2]:
+        #    articles[idx].pars += articles[idx+1].pars
+        #    toRemove.append(articles[idx+1].id)
+
+    #for article in articles:
+    #    if article.id in toRemove:
+    #        articles.remove(article)
+
+    return articles
+
+
+def isEmpty(caera):
+    falseList = []
+    for par in caera.pars:
+        if len(par.lines) > 0:
+            falseList.append(True)
+        else:
+            falseList.append(False)
+    if True in falseList:
+        return False
+    return True
+
+
+def confCheck(pageObject, conf):
+    for carea in pageObject.careas:
+        for par in carea.pars:
+            rmlines = []
+            for line in par.lines:
+                wConf = []
+                for word in line.words:
+                    wConf.append(word.x_wconf)
+                if len(wConf) > 0 and sum(wConf)/len(wConf) < conf:
+                    rmlines.append(line)
+            for rmline in rmlines:
+                par.lines.remove(rmline)
+
+    return pageObject
+
+
+def cleanTxt(pageObject):
+    for carea in pageObject.careas:
+        for par, indexPar in zip(carea.pars, range(0, len(carea.pars))):
+            for index in range(0, len(par.lines)):
+                if par.lines[index].words[-1].text[-1] == '-':
+                    if len(carea.pars) > (indexPar+1) and index + 1 > len(par.lines) - 1:
+                        carea.pars[indexPar+1].lines[0].words[0].text = par.lines[index].words[-1].text[:-1] + carea.pars[indexPar+1].lines[0].words[0].text
+                        par.lines[index].words.pop()
+                    elif index + 1 <= len(par.lines) - 1:
+                        par.lines[index + 1].words[0].text = par.lines[index].words[-1].text[:-1] + par.lines[index + 1].words[0].text
+                        par.lines[index].words.pop()
+    return pageObject
+
+
+def removeCarateresNS(pageObject):
+    carateres = ['+','@','#','$','%','&','*','|','=','á','à','é','è','í','ì',
+                 'ó','ò','ú','ù','Á','À','É','È','Í','Ì','Ó','Ò','Ú','Ù','â',
+                 'ê','î','ô','Â','Ê','Î','Ô','ã','õ','Ã','Õ','ç','Ç']
+    for carea in pageObject.careas:
+        toremoveLine = []
+        for par in carea.pars:
+            for line in par.lines:
+                for word in line.words:
+                    if word.text in carateres:
+                        if len(line.words) == 1:
+                            toremoveLine.append(line)
+                        else:
+                            line.words.remove(word)
+            for rmLine in toremoveLine:
+                par.lines.remove(rmLine)
+
+    return pageObject
+
+
+def createMarkdown(articles, outputFile):
+    f = open(outputFile, 'w')
+    wasTitle = False
+    for article in articles:
+        if not (isEmpty(article)):
+            if not (wasTitle):
+                f.write("\n\n___\n\n")
+            for par in article.pars:
+                for line in par.lines:
+                    wasTitle = False
+                    if article.textType == 'normal':
+                        f.write(" ".join([word.text for word in line.words]) + "\\\n")
+                    elif article.textType == 'h1':
+                        f.write("# " + " ".join([word.text for word in line.words]) + "\\\n")
+                        wasTitle = True
+                    elif article.textType == 'h2':
+                        f.write("## " + " ".join([word.text for word in line.words]) + "\\\n")
+                        wasTitle = True
+                    elif article.textType == 'h3':
+                        f.write("### " + " ".join([word.text for word in line.words]) + "\\\n")
+                        wasTitle = True
+                f.write("\n")
+
+
+def setCareasXSize(pageObject):
+    for carea in pageObject.careas:
+        xsizeTotal = sum([line.x_size for par in carea.pars for line in par.lines])
+        nlinhas = sum([len(par.lines) for par in carea.pars])
+        carea.xsize = xsizeTotal / nlinhas
+        carea.lines = nlinhas
+
+
+def chooseTitles(pageObject):
+    xsizes = {}
+    for carea in pageObject.careas:
+        if round(carea.xsize) in xsizes:
+            xsizes[round(carea.xsize)] += carea.lines
+        else:
+            xsizes[round(carea.xsize)] = carea.lines
+
+    for carea in pageObject.careas:
+        if round(carea.xsize) > 20 and xsizes[round(carea.xsize)] <= 20:
+            carea.textType = "h3"
+        if round(carea.xsize) >= 25 and xsizes[round(carea.xsize)] <= 20:
+            carea.textType = "h2"
+        if round(carea.xsize) >= 30 and xsizes[round(carea.xsize)] <= 5:
+            carea.textType = "h1"
+
+
+def help():
+    print("""
+NAME
+    hocr2md - hocr to markdown
+
+SYNOPSIS
+    hocr2md sourceImage [OPTION]
+
+DESCRIPTION
+    Converts image into hocr file, via tesseract, and hocr into markdown.
+        -h, --help              display this help menu
+
+        -o, --output            choose name and location to output markdown file (location must exist)
+
+        -e, --extractImages     extract images into nameOfInputFile_Images/
+
+        -p, --psm               choose psm to be used by tesseract (default=3)
+
+        -l, --lang              choose language to be used by tesseract (default=por)
+
+        --extractImagesFolder   choose folder to extract images
+
+        --conf                  choose value for line confidence (default=40, line is deleted if below confidence)
+
+        --dc                    show image with Careas limits drawn
+
+        --dp                    show image with Pars limits drawn
+
+        --dl                    show image with Lines limits drawn
+
+        --di                    show image with Images limits drawn
+
+        --da                    show image with Articles limits drawn
+
+    Some page segmentation modes, get a full list with tesseract --help-psm:
+         1                      Automatic page segmentation with OSD.
+         3                      Fully automatic page segmentation, but no OSD. (Default)
+         4                      Assume a single column of text of variable sizes.
+         5                      Assume a single uniform block of vertically aligned text.
+         6                      Assume a single uniform block of text.
+        11                      Sparse text. Find as much text as possible in no particular order.
+        13                      Raw line. Treat the oppenedImage as a single text line,
+                                bypassing hacks that are Tesseract-specific.\n""")
+
+def main():
+    try:
+        opts, args = getopt.getopt(sys.argv[2:], "ho:ep:l:", ["help", "output=",
+                                                              "extractImages",
+                                                              "extractImagesFolder=",
+                                                              "psm=", "lang=", "conf=",
+                                                              "dc", "dp", "dl",
+                                                              "di", "da"])
+    except getopt.GetoptError as err:
+        print(err)
+
+    if len(sys.argv) == 1 or sys.argv[1] == '-h' or sys.argv[1] == '--help':
+        help()
+        quit()
+
+    # Default options
+    sourceFile = sys.argv[1]
+    outputFile = sys.argv[1].split('.')[0].split('/')[-1] + ".md"
+    psmOption = "3"
+    language = "por"
+    extract = False
+    conf = 40
+
+    for opt, arg in opts:
+        if opt in ['-h', '--help']:
+            help()
+            quit()
+        if opt in ['-o', '--output']:
+            outputFile = arg
+        elif opt in ['-p', '--psm']:
+            psmOption = arg
+        elif opt in ['-l', '--lang']:
+            language = arg
+        elif opt in ['-e', '--extractImages']:
+            extract = True
+            sourceFilePath = sys.argv[1].split('.')[0]
+            outputImages = sourceFilePath.split('/')[-1] + "_Images"
+            if not os.path.exists(outputImages):
+                os.mkdir(outputImages)
+        elif opt in ['--extractImagesFolder']:
+            outputImages = arg
+            if not os.path.exists(outputImages):
+                os.mkdir(outputImages)
+        elif opt in ['--conf']:
+            conf = int(arg)
+
+    oppenedImage = PIL.Image.open(sourceFile)
+    hocr = pytesseract.image_to_pdf_or_hocr(oppenedImage,
+                                            config='--psm ' + psmOption,
+                                            lang=language, extension='hocr')
+
+    hocrPath = sys.argv[1].split('.')[0].split('/')[-1] + ".hocr"
+    with open(hocrPath, 'w+b') as f:
+        f.write(hocr)
+    page = parseHocr(hocrPath)
+
+    # Ensure extractImages runs before any draw
+    if extract:
+        extractImages(oppenedImage, page, outputImages)
+
+    draw = False
+    for opt, arg in opts:
+        if opt in ['--dc']:
+            drawCareaBoxes(oppenedImage, page)
+            draw = True
+        elif opt in ['--dp']:
+            drawParBoxes(oppenedImage, page)
+            draw = True
+        elif opt in ['--dl']:
+            drawLinesBoxes(oppenedImage, page)
+            draw = True
+        elif opt in ['--di']:
+            drawImageBoxes(oppenedImage, page)
+            draw = True
+        elif opt in ['--da']:
+            drawArticlesBoxes(oppenedImage, page)
+            draw = True
+
+    if draw:
+        oppenedImage.show()
+
+    setCareasXSize(page)
+    chooseTitles(page)
+    # articles = organizeArticles(articles)
+    page = cleanTxt(page)
+    page = confCheck(page, conf)
+    page = removeCarateresNS(page)
+    articles = copy.deepcopy(page.careas)
+    createMarkdown(articles, outputFile)
+
+
+    #breakpoint()
+
+
+if __name__ == "__main__":
+    main()

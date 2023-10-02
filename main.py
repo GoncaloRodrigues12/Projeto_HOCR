@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw
 import xml.etree.ElementTree as ET
 import pytesseract
 import copy
+import re
 
 
 class Page:
@@ -67,8 +68,7 @@ class Line:
     def addWord(self, word):
         self.wordsIdx += 1
         self.words.append(word)
-
-
+    
 class Word:
     def __init__(self, id, bbox, x_wconf, text):
         self.id = id
@@ -139,17 +139,20 @@ def parseHocr():
 
 def removeCarateresNS(pageObject):
     
-    carateres = ["@","#","$","%","&","*","|"]
+    carateres = ['+','@','#','$','%','&','*','|','=','á','à','é','è','í','ì','ó','ò','ú','ù','Á','À','É','È','Í','Ì','Ó','Ò','Ú','Ù','â','ê','î','ô','Â','Ê','Î','Ô','ã','õ','Ã','Õ','ç','Ç']
     for carea in pageObject.careas:
+        toremoveLine = []
         for par in carea.pars:
-            for line,indexLn in zip(par.lines, range(0,len(par.lines))):
-                for word,indexWrd in zip(line.words, range(0,len(line.words))):
+            for line in par.lines:
+                for word in line.words:
                     if word.text in carateres:
                         if len(line.words) == 1:
-                            del(par.lines[indexLn])
+                            toremoveLine.append(line)
                         else:
-                            del(line.words[indexWrd])
-
+                            line.words.remove(word)
+            for rmLine in toremoveLine:
+                par.lines.remove(rmLine)
+                        
     return pageObject
 
 def cleanTxt(pageObject):
@@ -164,21 +167,21 @@ def cleanTxt(pageObject):
                     elif index + 1 <= len(par.lines) - 1:
                         par.lines[index + 1].words[0].text = par.lines[index].words[-1].text[:-1] + par.lines[index + 1].words[0].text
                         par.lines[index].words.pop()
-                    #ter em atencao de alguma lista de words fica vazia (nao esta feito)
     return pageObject
 
 def confCheck(pageObject, conf):
-    #se na mesma linha houver uma palavra com conf > "conf" deixar linha, se nao, remover
-
     for carea in pageObject.careas:
         for par in carea.pars:
+            rmlines = []
             for line in par.lines:
+                wConf = []
                 for word in line.words:
-                    if word.x_wconf < conf:
-                        del(line)
-                        if len(carea.pars) == 0:
-                            del(par)
-                        break
+                    wConf.append(word.x_wconf)
+                if len(wConf) > 0 and sum(wConf)/len(wConf) < conf: 
+                    rmlines.append(line)
+            for rmline in rmlines:
+                par.lines.remove(rmline)
+
     return pageObject
 
 def letterType(pageObject):
@@ -190,7 +193,7 @@ def letterType(pageObject):
                 if line.x_size not in tamanhos:
                     tamanhos.append(line.x_size)
 
-    return print(len(tamanhos)), print(tamanhos)
+    return print(len(tamanhos)), print(sorted(tamanhos))
 
 
 def drawCareaBoxes(image, pageObject):
@@ -272,43 +275,63 @@ def organizeArticles(articles):
 
     return articles
 
+def isempety (caera):
+    
+    falseList = []
+    for par in caera.pars:
+        if len(par.lines) > 0:
+            falseList.append(True)
+        else:
+            falseList.append(False)
+    if True in falseList:
+        return False
+    return True
 
 def createMarkdown(articles):
     f = open("out/out.txt", 'w')
     for article in articles:
-        f.write("\n\n___\n\n")
-        for par in article.pars:
-            for line in par.lines:
-                f.write(" ".join([word.text for word in line.words]) + "\\\n")
-            f.write("\n")
+        if not (isempety(article)):
+            f.write("\n\n___\n\n")
+            for par in article.pars:
+                for line in par.lines:
+                    f.write(" ".join([word.text for word in line.words]) + "\\\n")
+                f.write("\n")
 
 
 def main():
     image = parseArgv()
     page1 = parseHocr()
+    # extractPhotos(image, page1)
 
-    articles = removeCarateresNS(page1)
-    articlesSC = cleanTxt(articles)
-    articlesConf = confCheck(articlesSC,30)
-    articlesClearConf = createArticles(articlesConf)
+    articlesSC = cleanTxt(page1)
+    articlesConf = confCheck(articlesSC,98)
+    articles = removeCarateresNS(articlesConf)
+    articlesClearConf = createArticles(articles)
     
-    #letterType(page1)
+    #removeCarateresNS(page1)
+    #cleanTxt(page1)
+    #confCheck(page1,30)
+    
+    #createArticles(page1)
+    
+
+    #letterType(articlesConf)
 
     # articles = organizeArticles(articles)
     
     createMarkdown(articlesClearConf)
+    #createMarkdown(createArticles(page1))
 
-    # drawCareaBoxes(image, page1)
+    #drawCareaBoxes(image, page1)
     # drawParBoxes(image, page1)
     # drawLinesBoxes(image, page1)
     # drawPhotosBoxes(image, page1)
     
     ##drawArticlesBoxes(image, articles)
 
-    ##image.show()
+    #image.show()
 
 
-    # extractPhotos(image, page1)
 
 
 if __name__ == "__main__":
